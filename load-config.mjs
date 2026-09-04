@@ -19,8 +19,8 @@ import { pathToFileURL } from 'node:url';
  * Required keys outside the publish subtree: [key path, predicate, expected].
  */
 const BUILD_RULES = [
-	[ 'textDomain', isNonEmptyString, 'a non-empty string' ],
-	[ 'versionConstant', isNonEmptyString, 'a non-empty string' ],
+	[ 'textDomain', isPathSegment, 'a plain name (letters, digits, ., _, -)' ],
+	[ 'versionConstant', isConstantName, 'a PHP constant name' ],
 	[ 'tempSuffix', ( v ) => isNonEmptyString( v ) && v.startsWith( '.' ), 'a string starting with "."' ],
 	[ 'globalExclude', isStringArray, 'an array of strings' ],
 	// Optional: basenames skipped anywhere in the tree (finder junk and the
@@ -38,7 +38,7 @@ const BUILD_RULES = [
  * Required per-variant keys, checked for every entry of config.variants.
  */
 const VARIANT_RULES = [
-	[ 'slug', isNonEmptyString, 'a non-empty string' ],
+	[ 'slug', isPathSegment, 'a plain name (letters, digits, ., _, -)' ],
 	[ 'removedPaths', isStringArray, 'an array of strings' ],
 	[ 'overlayPhpFiles', isStringArray, 'an array of strings' ],
 	[ 'postProcess', ( v ) => Array.isArray( v ) && v.every( ( f ) => 'function' === typeof f ), 'an array of functions' ],
@@ -51,11 +51,26 @@ const PUBLISH_RULES = [
 	[ 'publish.productSlug', isNonEmptyString, 'a non-empty string' ],
 	[ 'publish.apiBase', isNonEmptyString, 'a non-empty string' ],
 	[ 'publish.inZipProbe', isNonEmptyString, 'a non-empty string' ],
-	[ 'publish.packageVariantConstant', isNonEmptyString, 'a non-empty string' ],
+	[ 'publish.packageVariantConstant', isConstantName, 'a PHP constant name' ],
 ];
 
 function isNonEmptyString( value ) {
 	return 'string' === typeof value && '' !== value;
+}
+
+/**
+ * A PHP constant name. These values are interpolated into regexes, so an
+ * arbitrary string could crash the build or stamp the wrong constant.
+ */
+function isConstantName( value ) {
+	return 'string' === typeof value && /^[A-Za-z_][A-Za-z0-9_]*$/.test( value );
+}
+
+/**
+ * A plain name safe as a zip path segment (in-zip roots, the POT filename).
+ */
+function isPathSegment( value ) {
+	return 'string' === typeof value && /^[a-z0-9][a-z0-9._-]*$/i.test( value );
 }
 
 function isStringArray( value ) {

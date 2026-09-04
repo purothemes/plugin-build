@@ -138,7 +138,7 @@ try {
 		const root = makeRoot( VALID_CONFIG.replace( "\ttextDomain: 'fixture',\n", '' ) );
 		await assert.rejects(
 			loadBuildConfig( root ),
-			/"textDomain" must be a non-empty string/,
+			/"textDomain" must be a plain name/,
 			'a missing required string fails naming the key'
 		);
 	}
@@ -158,6 +158,24 @@ try {
 			loadBuildConfig( root ),
 			/"zipName" must be a function/,
 			'a wrong-typed function field fails naming the key'
+		);
+	}
+
+	{
+		const root = makeRoot( VALID_CONFIG.replace( "versionConstant: 'FIXTURE_VERSION',", "versionConstant: 'FIXTURE(VERSION',", ) );
+		await assert.rejects(
+			loadBuildConfig( root ),
+			/"versionConstant" must be a PHP constant name/,
+			'a regex metacharacter in a constant name is refused before it can build a pattern'
+		);
+	}
+
+	{
+		const root = makeRoot( VALID_CONFIG.replace( "lite: { slug: 'fixture',", "lite: { slug: '../fixture'," ) );
+		await assert.rejects(
+			loadBuildConfig( root ),
+			/"variants\.lite\.slug" must be a plain name/,
+			'a traversal-shaped slug is refused before it can become a zip entry root'
 		);
 	}
 

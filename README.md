@@ -81,7 +81,9 @@ before anything runs; the `publish.*` subtree is required only by
 net for first-party configuration, not input hardening: path contents are the
 consumer's responsibility, with one exception — `zipName()`'s return value is
 checked to be a plain `*.zip` basename, because a bad name there would write
-outside `dist/`.
+outside `dist/`; the two constant keys must be PHP constant names (they build
+regexes), and `textDomain` / `variants.<name>.slug` must be plain path-segment
+names (they build zip entry paths).
 
 Variant names are the keys of `config.variants`: the build CLI's targets and
 the publish channel are both validated against them.
