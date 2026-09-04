@@ -5,7 +5,7 @@
 	"description": "Release tooling for WordPress plugins: variant zips with PHP overlays, vendored-asset sync, version stamping, POT generation, and publishing to the update server. All product specifics come from the consuming plugin's build-config.mjs.",
 	"type": "module",
 	"scripts": {
-		"test": "node tests/generic.test.mjs"
+		"test": "node tests/generic.test.mjs && node tests/sync-vendor-assets.test.mjs"
 	},
 	"dependencies": {
 		"wp-pot": "^2.0.0",
