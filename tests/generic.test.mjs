@@ -196,6 +196,25 @@ try {
 		);
 	}
 
+	/* ── excludeBasenames reaches nested files ──────────────────────────── */
+
+	{
+		const { collectFiles } = await import( '../build-release.mjs' );
+		const root = makeRoot( null );
+		mkdirSync( join( root, 'assets' ) );
+		writeFileSync( join( root, 'assets', '.DS_Store' ), 'junk' );
+		writeFileSync( join( root, 'assets', 'real.css' ), 'body{}' );
+
+		const shared = { tempSuffix: '.x-tmp', globalExclude: [ 'build-config.mjs' ], excludeBasenames: [ '.DS_Store' ] };
+		const collected = collectFiles( root, { removedPaths: [] }, shared );
+
+		assert.ok( collected.includes( join( 'assets', 'real.css' ) ), 'real files are collected' );
+		assert.equal( collected.includes( join( 'assets', '.DS_Store' ) ), false, 'a nested excluded basename never ships' );
+
+		const without = collectFiles( root, { removedPaths: [] }, { ...shared, excludeBasenames: undefined } );
+		assert.ok( without.includes( join( 'assets', '.DS_Store' ) ), 'and the key is genuinely optional (absent means no basename filter)' );
+	}
+
 	/* ── assertZipName ──────────────────────────────────────────────────── */
 
 	assert.equal( assertZipName( 'a.zip' ), 'a.zip' );

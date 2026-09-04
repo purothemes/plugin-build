@@ -24,6 +24,9 @@ const BUILD_RULES = [
 	[ 'versionConstant', isNonEmptyString, 'a non-empty string' ],
 	[ 'tempSuffix', ( v ) => isNonEmptyString( v ) && v.startsWith( '.' ), 'a string starting with "."' ],
 	[ 'globalExclude', isStringArray, 'an array of strings' ],
+	// Optional: basenames skipped anywhere in the tree (finder junk and the
+	// like), unlike globalExclude's root-relative prefixes.
+	[ 'excludeBasenames', ( v ) => undefined === v || isStringArray( v ), 'an array of strings when present' ],
 	[ 'potExclude', isStringArray, 'an array of strings' ],
 	[ 'overlayDir', isNonEmptyString, 'a non-empty string' ],
 	[ 'zipName', ( v ) => 'function' === typeof v, 'a function (variant, version) => string' ],

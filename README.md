@@ -56,6 +56,7 @@ work in this repo, `npm ci` installs them here.
 | `tempSuffix` | string starting `.` | build + sync: in-progress write suffix, skipped by the packager |
 | `globalExclude` | string[] | build: paths excluded from every zip (prefix-matched) |
 | `potExclude` | string[] | build: extra exclusions for the POT scan |
+| `excludeBasenames` | string[] (optional) | build: names skipped anywhere in the tree (e.g. `.DS_Store`) |
 | `overlayDir` | string | build: root-relative dir holding `<variant>/<path>` PHP overlays |
 | `variants.<name>.slug` | string | build: in-zip root for that variant |
 | `variants.<name>.removedPaths` | string[] | build: paths stripped from that variant |

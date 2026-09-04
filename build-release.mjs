@@ -256,6 +256,12 @@ export function collectFiles( root, variant, shared ) {
 				continue;
 			}
 
+			// Names excluded wherever they appear. A root-relative prefix list
+			// cannot catch a nested .DS_Store, and one shipped that way once.
+			if ( ( shared.excludeBasenames || [] ).includes( entry ) ) {
+				continue;
+			}
+
 			// Global exclusions.
 			if ( isExcluded( rel, shared.globalExclude ) ) {
 				continue;
