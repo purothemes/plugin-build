@@ -74,6 +74,15 @@ if ( invokedPath && invokedPath === realpathSync( fileURLToPath( import.meta.url
 		}
 	}
 
+	// Two targets whose zipName collides would let the second build silently
+	// overwrite the first and still exit 0 with one artifact.
+	const names = targets.map( ( t ) => assertZipName( config.zipName( t, version ) ) );
+
+	if ( new Set( names ).size !== names.length ) {
+		console.error( `zipName() gives two targets the same artifact name: ${ names.join( ', ' ) }` );
+		process.exit( 1 );
+	}
+
 	if ( ! existsSync( distDir ) ) {
 		mkdirSync( distDir, { recursive: true } );
 	}

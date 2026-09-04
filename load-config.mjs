@@ -19,7 +19,6 @@ import { pathToFileURL } from 'node:url';
  * Required keys outside the publish subtree: [key path, predicate, expected].
  */
 const BUILD_RULES = [
-	[ 'slug', isNonEmptyString, 'a non-empty string' ],
 	[ 'textDomain', isNonEmptyString, 'a non-empty string' ],
 	[ 'versionConstant', isNonEmptyString, 'a non-empty string' ],
 	[ 'tempSuffix', ( v ) => isNonEmptyString( v ) && v.startsWith( '.' ), 'a string starting with "."' ],

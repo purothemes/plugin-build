@@ -34,13 +34,17 @@ Then point the plugin's npm scripts at the mount:
 Builds always take an explicit version: `npm run build -- -v 1.2.3`.
 
 The scripts resolve the plugin root as their mount's parent directory, and read
-two files from it:
+these root files:
 
-- **`build-config.mjs`** — required. `export default { ... }` with every key
-  below. Its presence is what defines a consuming root; there is no flag and no
-  environment variable for it.
+- **`build-config.mjs`** — `export default { ... }` with every key below. Its
+  presence is what defines a consuming root; there is no flag and no
+  environment variable for it. Required by the build and publish CLIs; the
+  sync CLI uses it for the temp suffix when present and falls back to a
+  generic default when it is not.
 - **`vendor-manifest.json`** — the vendored-asset contract (package, version,
   sources, target, sha256 per asset), read by `sync-vendor-assets.mjs`.
+- **`readme.txt`** — read by the publish CLI for the compatibility headers and
+  the changelog entry.
 
 Dependencies (`yazl`, `wp-pot`) resolve upward from `build/`, so declaring them
 in the plugin's own `package.json` is enough for mounted use. For standalone
@@ -50,7 +54,6 @@ work in this repo, `npm ci` installs them here.
 
 | Key | Type | Used by |
 |---|---|---|
-| `slug` | string | build: in-zip root directory |
 | `textDomain` | string | build: WP_Pot domain and `languages/<textDomain>.pot` |
 | `versionConstant` | string | build: stamped `define()`; publish: identity check |
 | `tempSuffix` | string starting `.` | build + sync: in-progress write suffix, skipped by the packager |

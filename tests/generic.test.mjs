@@ -26,7 +26,6 @@ mkdirSync( TMP_BASE, { recursive: true } );
 
 /** A minimal, valid config body (as source text for fixture files). */
 const VALID_CONFIG = `export default {
-	slug: 'fixture',
 	textDomain: 'fixture',
 	versionConstant: 'FIXTURE_VERSION',
 	tempSuffix: '.fixture-tmp',
@@ -121,7 +120,7 @@ try {
 	{
 		const root = makeRoot( VALID_CONFIG );
 		const config = loadBuildConfig( root );
-		assert.equal( ( await config ).slug, 'fixture', 'a valid config loads' );
+		assert.equal( ( await config ).textDomain, 'fixture', 'a valid config loads' );
 	}
 
 	{
@@ -145,16 +144,12 @@ try {
 	}
 
 	{
-		const root = makeRoot( VALID_CONFIG.replace( 'globalExclude: [', 'globalExclude: 7; const _junk = [' ).replace( "7; const _junk = [ 'build'", "7, _ignored = [ 'build'" ) );
-		// If the mangling above produced invalid JS, the import itself throws,
-		// which still proves the loader surfaces it — but prefer the clean case:
-		const cleanRoot = makeRoot( VALID_CONFIG.replace( "globalExclude: [ 'build', 'build-config.mjs', 'dist', 'node_modules' ],", 'globalExclude: 7,' ) );
+		const root = makeRoot( VALID_CONFIG.replace( "globalExclude: [ 'build', 'build-config.mjs', 'dist', 'node_modules' ],", 'globalExclude: 7,' ) );
 		await assert.rejects(
-			loadBuildConfig( cleanRoot ),
+			loadBuildConfig( root ),
 			/"globalExclude" must be an array of strings/,
 			'a wrong-typed array field fails naming the key'
 		);
-		rmSync( root, { recursive: true, force: true } );
 	}
 
 	{
@@ -249,6 +244,19 @@ try {
 		installFakeVendor( root );
 		const result = runCli( root, join( root, 'build', 'build-release.mjs' ), [ 'lite', '-v', '1.0.0' ] );
 		assert.notEqual( result.status, 0, 'a typo overlay entry fails the build' );
+		assert.match( result.stderr, /Overlay target not in the collected source set/, 'refused on the collected-set branch' );
+
+		// The other preflight branch: the source file IS collected, but the
+		// overlay copy is absent from overlayDir. An implementation that only
+		// checked the collected set would pass the case above and ship the
+		// un-overlaid file here.
+		writeFileSync( join( root, 'build-config.mjs' ), VALID_CONFIG.replace(
+			'overlayPhpFiles: []',
+			"overlayPhpFiles: [ 'fixture.php' ]"
+		) );
+		const missingCopy = runCli( root, join( root, 'build', 'build-release.mjs' ), [ 'lite', '-v', '1.0.0' ] );
+		assert.notEqual( missingCopy.status, 0, 'a collected target with no overlay copy fails too' );
+		assert.match( missingCopy.stderr, /Missing overlay file: overlays\/lite\/fixture\.php/, 'naming the expected overlay path' );
 		assert.match( result.stderr, /Overlay target not in the collected source set: no-such-file\.php/, 'naming the entry' );
 	}
 
