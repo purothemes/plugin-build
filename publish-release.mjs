@@ -7,6 +7,11 @@
  * query string, Bearer ADMIN_TOKEN auth). The server derives the storage path
  * and computes the SHA-256 checksum; this script supplies neither.
  *
+ * Every published field is read out of the archive itself: the version and
+ * variant from the packaged bootstrap, the compatibility headers and changelog
+ * from the packaged readme.txt. The working tree is never consulted, so a ZIP
+ * built from an earlier checkout ships the notes it was built with.
+ *
  * Everything product-specific comes from build-config.mjs at the consuming
  * plugin root; see load-config.mjs for the contract.
  *
@@ -66,8 +71,8 @@ export function parseArgs( argv ) {
 /**
  * Extract the WordPress compatibility headers from readme.txt content.
  *
- * Sources requires_wp / tested_wp / requires_php from the plugin's own manifest
- * so published metadata stays in sync instead of drifting from hardcoded values.
+ * Pure over whatever readme text it is handed; main() hands it the copy packaged
+ * inside the artifact, so published metadata matches the ZIP being shipped.
  * Missing fields are returned as undefined (the server applies its own defaults).
  *
  * @param {string} readmeText - Raw readme.txt contents.
@@ -89,6 +94,31 @@ export function parseReadmeMeta( readmeText ) {
 }
 
 /**
+ * Read one entry out of a ZIP as UTF-8 text.
+ *
+ * @param {string} zipPath - Path to the archive.
+ * @param {string} entry   - In-zip path of the entry.
+ * @return {string|null} The entry's text, or null when the archive has no such
+ *         entry (unzip status 11). Any other failure, such as a corrupt archive
+ *         or a missing unzip binary, is thrown so it is never mistaken for an
+ *         absent entry.
+ */
+function readZipEntry( zipPath, entry ) {
+	try {
+		return execFileSync( 'unzip', [ '-p', zipPath, entry ], {
+			encoding: 'utf8',
+			maxBuffer: 4 * 1024 * 1024,
+			stdio: [ 'ignore', 'pipe', 'ignore' ]
+		} );
+	} catch ( err ) {
+		if ( 11 === err.status ) {
+			return null;
+		}
+		throw err;
+	}
+}
+
+/**
  * Read what a built artifact actually is, from the packaged bootstrap header.
  *
  * The filename is a label; this is the plugin the archive installs as.
@@ -98,11 +128,13 @@ export function parseReadmeMeta( readmeText ) {
  * such as `Update URI:` only correlates with Pro; the constant states it.
  *
  * The runtime version is read separately from the header. The build stamps both
- * together, so a ZIP where they disagree was not produced by one, and its
- * The configured version constant drives update comparisons and asset versions once
- * installed, not the header the release metadata is taken from.
+ * together, so a ZIP where they disagree was not produced by one. The configured
+ * version constant drives update comparisons and asset versions once installed;
+ * the header is what the release metadata is taken from.
  *
  * @param {string} zipPath - Path to the release ZIP.
+ * @param {object} config  - Loaded build config (publish.inZipProbe, versionConstant,
+ *                           publish.packageVariantConstant).
  * @return {{version: string, runtimeVersion: string, variant: string}} Empty
  *         strings when unreadable.
  */
@@ -110,11 +142,12 @@ function readArtifactIdentity( zipPath, config ) {
 	let php;
 
 	try {
-		php = execFileSync( 'unzip', [ '-p', zipPath, config.publish.inZipProbe ], {
-			encoding: 'utf8',
-			maxBuffer: 4 * 1024 * 1024
-		} );
-	} catch ( err ) {
+		php = readZipEntry( zipPath, config.publish.inZipProbe );
+	} catch {
+		php = null;
+	}
+
+	if ( null === php ) {
 		return { version: '', runtimeVersion: '', variant: '' };
 	}
 
@@ -405,8 +438,26 @@ async function main() {
 		process.exit( 1 );
 	}
 
-	// Source compatibility headers + changelog from the plugin's own readme.txt.
-	const readmeText = readFileSync( join( ROOT, 'readme.txt' ), 'utf8' );
+	// Compatibility headers + changelog come from the readme packaged inside the
+	// artifact, not from the working tree: the tree may have moved on since this
+	// ZIP was built, and the notes that ship must be the ones it was built with.
+	// The build writes the readme at <slug>/readme.txt, the same root it gives
+	// every entry.
+	const readmeEntry = `${ config.variants[ channel ].slug }/readme.txt`;
+	let readmeText;
+
+	try {
+		readmeText = readZipEntry( zipPath, readmeEntry );
+	} catch ( err ) {
+		console.error( `Could not read ${ readmeEntry } from dist/${ zipName }: ${ err.message }` );
+		process.exit( 1 );
+	}
+
+	if ( null === readmeText ) {
+		console.error( `dist/${ zipName } has no ${ readmeEntry }.\n${ rebuild }` );
+		process.exit( 1 );
+	}
+
 	const readmeMeta = parseReadmeMeta( readmeText );
 	const changelog = parseChangelogHtml( readmeText, version );
 
@@ -416,8 +467,8 @@ async function main() {
 	// release whose notes belong to a different version, or to nothing at all.
 	if ( '' === changelog ) {
 		console.error(
-			`No changelog entry for ${ version } in readme.txt.\n` +
-			`Add a '= ${ version } =' section under '== Changelog ==' before publishing.`
+			`No changelog entry for ${ version } in dist/${ zipName } (${ readmeEntry }).\n` +
+			`Add a '= ${ version } =' section under '== Changelog ==' in readme.txt and rebuild.`
 		);
 		process.exit( 1 );
 	}
