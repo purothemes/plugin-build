@@ -7,10 +7,13 @@
  * query string, Bearer ADMIN_TOKEN auth). The server derives the storage path
  * and computes the SHA-256 checksum; this script supplies neither.
  *
- * Every published field is read out of the archive itself: the version and
- * variant from the packaged bootstrap, the compatibility headers and changelog
- * from the packaged readme.txt. The working tree is never consulted, so a ZIP
- * built from an earlier checkout ships the notes it was built with.
+ * The release metadata describing the artifact is read out of the archive
+ * itself: the version and variant it was stamped with (checked against the
+ * request) from the packaged bootstrap, and the compatibility headers and
+ * changelog from the packaged readme.txt. The working-tree readme is never
+ * consulted, so a ZIP built from an earlier checkout ships the notes it was
+ * built with. The product slug, channel and server come from the config and
+ * the command line.
  *
  * Everything product-specific comes from build-config.mjs at the consuming
  * plugin root; see load-config.mjs for the contract.
@@ -26,7 +29,8 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { releaseVersionError } from './release-version.mjs';
@@ -136,16 +140,11 @@ function readZipEntry( zipPath, entry ) {
  * @param {object} config  - Loaded build config (publish.inZipProbe, versionConstant,
  *                           publish.packageVariantConstant).
  * @return {{version: string, runtimeVersion: string, variant: string}} Empty
- *         strings when unreadable.
+ *         strings when the archive has no probe entry. Any other read failure
+ *         propagates from readZipEntry().
  */
 function readArtifactIdentity( zipPath, config ) {
-	let php;
-
-	try {
-		php = readZipEntry( zipPath, config.publish.inZipProbe );
-	} catch {
-		php = null;
-	}
+	const php = readZipEntry( zipPath, config.publish.inZipProbe );
 
 	if ( null === php ) {
 		return { version: '', runtimeVersion: '', variant: '' };
@@ -410,6 +409,16 @@ async function main() {
 		process.exit( 1 );
 	}
 
+	// The bytes are taken once, here, and every check below runs against a
+	// private copy of exactly those bytes. dist/ can be rewritten by a build at
+	// any moment; what gets validated must be what gets uploaded.
+	const bytes = readFileSync( zipPath );
+	const snapshotDir = mkdtempSync( join( tmpdir(), 'publish-release-' ) );
+	const snapshot = join( snapshotDir, zipName );
+
+	writeFileSync( snapshot, bytes );
+	process.on( 'exit', () => rmSync( snapshotDir, { recursive: true, force: true } ) );
+
 	// The artifact is whatever is sitting at that path, which is not necessarily
 	// what a build just produced: a ZIP keeps whatever filename it is given, and
 	// the name is the only thing tying it to this release. Publish the wrong bytes
@@ -421,7 +430,14 @@ async function main() {
 	// to the Pro channel would hand paying sites the Free plugin. It is read from
 	// the configured package-variant constant, which the bootstrap declares
 	// outright.
-	const artifact = readArtifactIdentity( zipPath, config );
+	let artifact;
+
+	try {
+		artifact = readArtifactIdentity( snapshot, config );
+	} catch ( err ) {
+		console.error( `Could not read ${ config.publish.inZipProbe } from dist/${ zipName }: ${ err.message }` );
+		process.exit( 1 );
+	}
 
 	const rebuild = `Rebuild it:\n  npm run build:${ channel } -- -v ${ version }`;
 
@@ -452,7 +468,7 @@ async function main() {
 	let readmeText;
 
 	try {
-		readmeText = readZipEntry( zipPath, readmeEntry );
+		readmeText = readZipEntry( snapshot, readmeEntry );
 	} catch ( err ) {
 		console.error( `Could not read ${ readmeEntry } from dist/${ zipName }: ${ err.message }` );
 		process.exit( 1 );
@@ -488,7 +504,6 @@ async function main() {
 		changelog: changelog || undefined,
 	} );
 
-	const bytes = readFileSync( zipPath );
 	const localChecksum = sha256Hex( bytes );
 
 	console.log( `Uploading dist/${ zipName } (${ bytes.length } bytes) → ${ apiBase } …` );
