@@ -43,8 +43,9 @@ these root files:
   generic default when it is not.
 - **`vendor-manifest.json`** — the vendored-asset contract (package, version,
   sources, target, sha256 per asset), read by `sync-vendor-assets.mjs`.
-- **`readme.txt`** — read by the publish CLI for the compatibility headers and
-  the changelog entry.
+- **`readme.txt`** — packaged by the build CLI. The publish CLI reads the copy
+  inside the artifact (`<slug>/readme.txt`), never this one, for the
+  compatibility headers and the changelog entry.
 
 Dependencies (`yazl`, `wp-pot`) resolve upward from `build/`, so declaring them
 in the plugin's own `package.json` is enough for mounted use. For standalone
@@ -98,7 +99,10 @@ the publish channel are both validated against them.
 - Vendored assets are regenerated from the pinned package and hash-verified
   before the file list is taken; a partial write can never enter a zip.
 - The published artifact's version and variant are read back out of the zip
-  and must agree with the request before an upload starts.
+  and must agree with the request before an upload starts. Its readme is read
+  the same way: the headers and changelog sent to the server describe the bytes
+  being uploaded, not the current checkout, and a zip whose readme has no entry
+  for the version is refused.
 
 ## Updating
 
