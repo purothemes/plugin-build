@@ -176,16 +176,21 @@ function readArtifactIdentity( zipPath, config ) {
  * @return {string} HTML string, or '' when no matching entry exists.
  */
 export function parseChangelogHtml( readmeText, version ) {
-	// Isolate the Changelog section (up to the next `== Section ==` or EOF).
-	const sectionMatch = readmeText.match(
-		/==\s*Changelog\s*==\s*([\s\S]*?)(?:\n==\s|\s*$)/i
-	);
-	if ( ! sectionMatch ) {
+	// Isolate the Changelog section: the lines after its heading, up to the
+	// next `== Section ==` heading or EOF. Done line by line so an empty
+	// section stays empty instead of running on into the section after it.
+	const allLines = readmeText.split( /\r?\n/ );
+	const start = allLines.findIndex( ( line ) => /^==\s*Changelog\s*==\s*$/i.test( line ) );
+	if ( -1 === start ) {
 		return '';
 	}
 
-	const section = sectionMatch[ 1 ];
-	const lines = section.split( /\r?\n/ );
+	let end = allLines.findIndex( ( line, index ) => index > start && /^==\s/.test( line ) );
+	if ( -1 === end ) {
+		end = allLines.length;
+	}
+
+	const lines = allLines.slice( start + 1, end );
 
 	// Escape for use in a RegExp (version may contain dots).
 	const escaped = version.replace( /[.*+?^${}()|[\]\\]/g, '\\$&' );
