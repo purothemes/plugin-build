@@ -416,8 +416,10 @@ async function main() {
 	const snapshotDir = mkdtempSync( join( tmpdir(), 'publish-release-' ) );
 	const snapshot = join( snapshotDir, zipName );
 
-	writeFileSync( snapshot, bytes );
+	// Registered before anything is written into the directory, so it is removed
+	// on every exit path, a failed write included.
 	process.on( 'exit', () => rmSync( snapshotDir, { recursive: true, force: true } ) );
+	writeFileSync( snapshot, bytes );
 
 	// The artifact is whatever is sitting at that path, which is not necessarily
 	// what a build just produced: a ZIP keeps whatever filename it is given, and
