@@ -417,8 +417,11 @@ async function main() {
 	const snapshot = join( snapshotDir, zipName );
 
 	// Registered before anything is written into the directory, so it is removed
-	// on every exit path, a failed write included.
+	// on every exit path: a failed write, process.exit(), or an interrupt, which
+	// is turned into an ordinary exit so the handler runs.
 	process.on( 'exit', () => rmSync( snapshotDir, { recursive: true, force: true } ) );
+	process.on( 'SIGINT', () => process.exit( 130 ) );
+	process.on( 'SIGTERM', () => process.exit( 143 ) );
 	writeFileSync( snapshot, bytes );
 
 	// The artifact is whatever is sitting at that path, which is not necessarily
