@@ -140,23 +140,31 @@ fails unless both carry Stable tag `<version>`.
 
 Steps for a release:
 
-1. Build and check the free zip:
+1. Once, add the npm script to the plugin's `package.json`, naming the variant
+   that ships on WordPress.org:
+   ```json
+   "publish:wporg": "node build/publish-wporg.mjs --variant free"
+   ```
+   Without it, call the script directly wherever the steps below say
+   `npm run publish:wporg --`:
+   `node build/publish-wporg.mjs --variant free -v 1.2.0 --svn ~/svn/<slug>`
+2. Build and check the free zip:
    `npm run build:free -- -v 1.2.0`. Its readme needs `Stable tag` stamped to
    the version (the build does this) and a changelog entry.
-2. Once, check out the SVN repository root. Skip the tags' contents, which
+3. Once, check out the SVN repository root. Skip the tags' contents, which
    grow with every release:
    ```sh
    svn checkout --depth immediates https://plugins.svn.wordpress.org/<slug> ~/svn/<slug>
    svn update --set-depth infinity ~/svn/<slug>/trunk ~/svn/<slug>/assets
    ```
    Before each later release: `svn update ~/svn/<slug>`.
-3. Dry run, and read the status it prints:
+4. Dry run, and read the status it prints:
    `npm run publish:wporg -- -v 1.2.0 --svn ~/svn/<slug>`
-4. Commit: the same command with `--commit`. svn asks for the WordPress.org
+5. Commit: the same command with `--commit`. svn asks for the WordPress.org
    password (it is the SVN password from the profile, not the login one).
-5. Tag the release in git with the same version, so the git tag and the SVN
+6. Tag the release in git with the same version, so the git tag and the SVN
    tag name the same code: `git tag 1.2.0 <commit> && git push origin 1.2.0`.
-6. Check the plugin page: the version, the banner, the icon and the
+7. Check the plugin page: the version, the banner, the icon and the
    screenshots. The directory can take some minutes to rebuild it.
 
 `--root <path>` points the script at another plugin root (default: the mount's
