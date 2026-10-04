@@ -100,15 +100,18 @@ export function parseArgs( argv ) {
 /* ──────────────────────────────────────────────────────────────────────────── */
 
 /**
- * The Stable tag header of a readme.txt, or '' when it has none.
+ * The Stable tag header of a readme.txt, or '' when it has none or it is blank.
+ *
+ * The value is read from the header's own line only. A blank header must stay
+ * blank: read across the line break, it would take the next line as its value.
  *
  * @param {string} readmeText - Raw readme.txt contents.
  * @return {string}
  */
 export function parseStableTag( readmeText ) {
-	const match = readmeText.match( /^Stable tag:\s*(.+?)\s*$/mi );
+	const match = readmeText.match( /^Stable tag:[ \t]*([^\r\n]*)/mi );
 
-	return match ? match[ 1 ] : '';
+	return match ? match[ 1 ].trim() : '';
 }
 
 /* ──────────────────────────────────────────────────────────────────────────── */
@@ -129,6 +132,19 @@ function svn( args, cwd ) {
 		maxBuffer: 64 * 1024 * 1024,
 		stdio: [ 'ignore', 'pipe', 'pipe' ],
 	} );
+}
+
+/**
+ * A working-copy path as an svn argument. svn reads the last @ in a path as a
+ * peg revision, so `icon@2x.png` names `icon` at revision `2x.png`; a trailing
+ * @ is an empty peg and leaves the path as written. Every working-copy path
+ * passed to svn goes through here, not only the ones known to hold an @.
+ *
+ * @param {string} path - Working-copy path.
+ * @return {string}
+ */
+export function wcArg( path ) {
+	return `${ path }@`;
 }
 
 /**
@@ -205,7 +221,7 @@ export function mirrorIntoSvn( source, target, skip ) {
 		}
 
 		if ( wanted.get( rel ) !== kind ) {
-			svn( [ 'rm', '--force', '--quiet', join( target, rel ) ] );
+			svn( [ 'rm', '--force', '--quiet', wcArg( join( target, rel ) ) ] );
 			removed.push( rel );
 		}
 	}
@@ -218,7 +234,7 @@ export function mirrorIntoSvn( source, target, skip ) {
 		}
 	}
 
-	svn( [ 'add', '--force', '--no-ignore', '--quiet', target ] );
+	svn( [ 'add', '--force', '--no-ignore', '--quiet', wcArg( target ) ] );
 }
 
 /**
@@ -240,7 +256,7 @@ export function setImageMimeTypes( dir ) {
 		let current = '';
 
 		try {
-			current = svn( [ 'propget', 'svn:mime-type', path ] ).trim();
+			current = svn( [ 'propget', 'svn:mime-type', wcArg( path ) ] ).trim();
 		} catch ( err ) {
 			// W200017: the property is not set. Older svn prints nothing instead.
 			if ( ! /W200017/.test( String( err.stderr ) ) ) {
@@ -249,7 +265,7 @@ export function setImageMimeTypes( dir ) {
 		}
 
 		if ( current !== mime ) {
-			svn( [ 'propset', '--quiet', 'svn:mime-type', mime, path ] );
+			svn( [ 'propset', '--quiet', 'svn:mime-type', mime, wcArg( path ) ] );
 		}
 	}
 }
@@ -267,7 +283,7 @@ export function setImageMimeTypes( dir ) {
 export function stageRelease( { wc, pluginDir, assetsDir, version, skip } ) {
 	for ( const dir of [ 'trunk', 'tags', 'assets' ] ) {
 		if ( ! existsSync( join( wc, dir ) ) ) {
-			svn( [ 'mkdir', '--quiet', join( wc, dir ) ] );
+			svn( [ 'mkdir', '--quiet', wcArg( join( wc, dir ) ) ] );
 		}
 	}
 
@@ -292,7 +308,7 @@ export function stageRelease( { wc, pluginDir, assetsDir, version, skip } ) {
 		setImageMimeTypes( join( wc, 'assets' ) );
 	}
 
-	svn( [ 'cp', '--quiet', join( wc, 'trunk' ), tag ] );
+	svn( [ 'cp', '--quiet', wcArg( join( wc, 'trunk' ) ), wcArg( tag ) ] );
 }
 
 /**
@@ -444,13 +460,13 @@ async function main() {
 	let repoRoot;
 
 	try {
-		const relative = svn( [ 'info', '--show-item', 'relative-url', wc ] ).trim();
+		const relative = svn( [ 'info', '--show-item', 'relative-url', wcArg( wc ) ] ).trim();
 
 		if ( '^/' !== relative ) {
 			fail( `${ wc } is a checkout of ${ relative }, not of the repository root. Check out the root: trunk/, tags/ and assets/ are all staged.` );
 		}
 
-		repoRoot = svn( [ 'info', '--show-item', 'repos-root-url', wc ] ).trim();
+		repoRoot = svn( [ 'info', '--show-item', 'repos-root-url', wcArg( wc ) ] ).trim();
 	} catch ( err ) {
 		fail( `${ wc } is not an svn working copy: ${ String( err.stderr || err.message ).trim() }` );
 	}
@@ -514,7 +530,7 @@ async function main() {
 	}
 
 	// Interactive, so svn can ask for the WordPress.org password.
-	execFileSync( 'svn', [ 'commit', '-m', `Release ${ version }`, wc ], { stdio: 'inherit' } );
+	execFileSync( 'svn', [ 'commit', '-m', `Release ${ version }`, wcArg( wc ) ], { stdio: 'inherit' } );
 
 	// Read the result back from the repository, not the working copy.
 	for ( const path of [ 'trunk/readme.txt', `tags/${ version }/readme.txt` ] ) {

@@ -41,6 +41,8 @@ assert.throws( () => parseArgs( [ '--svn' ] ), /--svn requires a value/ );
 
 assert.equal( parseStableTag( '=== X ===\nStable tag: 1.4.0 \nLicense: GPL\n' ), '1.4.0' );
 assert.equal( parseStableTag( '=== X ===\nLicense: GPL\n' ), '' );
+assert.equal( parseStableTag( 'Stable tag: 1.4.0\r\nLicense: GPL\r\n' ), '1.4.0', 'CRLF line ends are not part of the value' );
+assert.equal( parseStableTag( '=== X ===\nStable tag:\r\n1.2.0\r\n' ), '', 'a blank Stable tag never reads the next line as its value' );
 
 assert.deepEqual(
 	summarizeStatus( 'A       trunk/a.php\nD       trunk/b.php\n M      assets/icon.png\nA  +    tags/1.0.0\n', '1.0.0' ),
@@ -92,7 +94,7 @@ function makeRoot() {
 
 	const art = join( root, '.wordpress-org' );
 	mkdirSync( art );
-	for ( const name of [ 'icon-128x128.png', 'banner-772x250.jpg', 'icon.svg', 'anim.gif', '.DS_Store' ] ) {
+	for ( const name of [ 'icon-128x128.png', 'icon@2x.png', 'banner-772x250.jpg', 'icon.svg', 'anim.gif', '.DS_Store' ] ) {
 		writeFileSync( join( art, name ), `bytes of ${ name }\n` );
 	}
 
@@ -108,13 +110,14 @@ function makeRoot() {
  * @param {string} [opts.stable] - Readme Stable tag (default: the version).
  * @param {string} [opts.variant]  - The variant constant and zip name.
  * @param {object} [opts.files]  - Extra relPath → content entries.
+ * @param {string} [opts.readme] - Whole readme.txt, replacing the default.
  */
-function buildZip( root, { version, stable = version, variant = 'lite', files = {} } ) {
+function buildZip( root, { version, stable = version, variant = 'lite', files = {}, readme } ) {
 	const stage = mkdtempSync( join( TMP, 'zip-' ) );
 	const plugin = join( stage, 'fixture' );
 	const all = {
 		'fixture.php': `<?php\n/*\n * Plugin Name: Fixture\n * Version: ${ version }\n */\ndefine( 'FIXTURE_VERSION', '${ version }' );\ndefine( 'FIXTURE_VARIANT', '${ variant }' );\n`,
-		'readme.txt': `=== Fixture ===\nStable tag: ${ stable }\n\n== Changelog ==\n\n= ${ version } =\n* Release.\n`,
+		'readme.txt': readme ?? `=== Fixture ===\nStable tag: ${ stable }\n\n== Changelog ==\n\n= ${ version } =\n* Release.\n`,
 		...files,
 	};
 
@@ -137,9 +140,13 @@ function makeRepo() {
 
 	execFileSync( 'svnadmin', [ 'create', repo ] );
 	execFileSync( 'svn', [ 'mkdir', '-q', '-m', 'Layout', `${ url }/trunk`, `${ url }/tags`, `${ url }/assets` ] );
-	execFileSync( 'svn', [ 'checkout', '-q', url, join( dir, 'wc' ) ] );
+	// An @ in the working copy's own path: every path the CLI hands svn is
+	// built from it, so an unescaped one fails at once (svn reads @ as a peg).
+	// (A checkout's destination is not peg-parsed, so it takes no escape.)
+	const wc = join( dir, 'wc@home' );
+	execFileSync( 'svn', [ 'checkout', '-q', url, wc ] );
 
-	return { repo, url, wc: join( dir, 'wc' ) };
+	return { repo, url, wc };
 }
 
 function publish( root, wc, version, ...extra ) {
@@ -166,14 +173,14 @@ try {
 
 	/* ── first release: dry run, then commit ──────────────────────────── */
 
-	buildZip( root, { version: '1.0.0', files: { 'src/old.php': '<?php // old\n', 'src/keep.php': '<?php // v1\n' } } );
+	buildZip( root, { version: '1.0.0', files: { 'src/old.php': '<?php // old\n', 'src/keep.php': '<?php // v1\n', 'img/old@2.png': 'png\n' } } );
 
 	{
 		const before = youngest( repo );
 		const dry = publish( root, wc, '1.0.0' );
 
 		assert.equal( dry.status, 0, `first dry run succeeds: ${ dry.stderr }` );
-		for ( const line of [ 'A       trunk/fixture.php', 'A       trunk/src/old.php', 'A       assets/icon-128x128.png', 'A  +    tags/1.0.0' ] ) {
+		for ( const line of [ 'A       trunk/fixture.php', 'A       trunk/src/old.php', 'A       trunk/img/old@2.png', 'A       assets/icon-128x128.png', 'A       assets/icon@2x.png', 'A  +    tags/1.0.0' ] ) {
 			assert.ok( dry.stdout.includes( line ), `dry run lists "${ line }"` );
 		}
 		assert.match( dry.stdout, /Dry run: .* is unchanged/, 'and says it changed nothing' );
@@ -187,20 +194,21 @@ try {
 
 		assert.equal( committed.status, 0, `first commit succeeds: ${ committed.stderr }` );
 		assert.equal( youngest( repo ), '2', '--commit makes one commit' );
-		assert.deepEqual( ls( `${ url }/trunk` ), [ 'fixture.php', 'readme.txt', 'src/', 'src/keep.php', 'src/old.php' ] );
+		assert.deepEqual( ls( `${ url }/trunk` ), [ 'fixture.php', 'img/', 'img/old@2.png', 'readme.txt', 'src/', 'src/keep.php', 'src/old.php' ] );
 		assert.deepEqual( ls( `${ url }/tags/1.0.0` ), ls( `${ url }/trunk` ), 'the tag is a copy of trunk' );
 		assert.equal( parseStableTag( out( 'svn', [ 'cat', `${ url }/trunk/readme.txt` ] ) ), '1.0.0', 'trunk Stable tag names the new tag' );
 		assert.equal( mime( `${ url }/assets/icon-128x128.png` ), 'image/png' );
 		assert.equal( mime( `${ url }/assets/banner-772x250.jpg` ), 'image/jpeg' );
 		assert.equal( mime( `${ url }/assets/anim.gif` ), 'image/gif' );
 		assert.equal( mime( `${ url }/assets/icon.svg` ), 'image/svg+xml' );
+		assert.equal( mime( `${ url }/assets/icon@2x.png@` ), 'image/png', 'an @ in a name is no peg revision' );
 		assert.match( committed.stdout, /both say Stable tag 1\.0\.0/, 'the committed result is read back from the repository' );
 	}
 
 	/* ── second release: adds, removes, modifies ──────────────────────── */
 
 	execFileSync( 'svn', [ 'update', '-q' ], { cwd: wc } );
-	buildZip( root, { version: '1.1.0', files: { 'src/keep.php': '<?php // v2\n', 'src/new.php': '<?php // new\n' } } );
+	buildZip( root, { version: '1.1.0', files: { 'src/keep.php': '<?php // v2\n', 'src/new.php': '<?php // new\n', 'img/new.png': 'png\n' } } );
 	rmSync( join( root, '.wordpress-org', 'anim.gif' ) );
 	writeFileSync( join( root, '.wordpress-org', 'icon-256x256.png' ), 'bigger icon\n' );
 
@@ -211,6 +219,7 @@ try {
 		for ( const line of [
 			'A       trunk/src/new.php',
 			'D       trunk/src/old.php',
+			'D       trunk/img/old@2.png',
 			'M       trunk/src/keep.php',
 			'M       trunk/fixture.php',
 			'D       assets/anim.gif',
@@ -219,16 +228,17 @@ try {
 			assert.ok( dry.stdout.includes( line ), `dry run lists "${ line }"` );
 		}
 		assert.equal( / M {6}assets\/icon-128x128\.png/.test( dry.stdout ), false, 'an image whose type is already right shows no property change' );
-		assert.match( dry.stdout, /trunk: 1 added, 1 deleted, 3 modified/ );
+		assert.match( dry.stdout, /trunk: 2 added, 2 deleted, 3 modified/ );
 	}
 
 	{
 		const committed = publish( root, wc, '1.1.0', '--commit' );
 
 		assert.equal( committed.status, 0, `second commit succeeds: ${ committed.stderr }` );
-		assert.deepEqual( ls( `${ url }/trunk` ), [ 'fixture.php', 'readme.txt', 'src/', 'src/keep.php', 'src/new.php' ], 'trunk holds exactly the new ZIP' );
+		assert.deepEqual( ls( `${ url }/trunk` ), [ 'fixture.php', 'img/', 'img/new.png', 'readme.txt', 'src/', 'src/keep.php', 'src/new.php' ], 'trunk holds exactly the new ZIP' );
 		assert.deepEqual( ls( `${ url }/tags/1.1.0` ), ls( `${ url }/trunk` ) );
 		assert.ok( ls( `${ url }/tags/1.0.0` ).includes( 'src/old.php' ), 'the earlier tag is untouched' );
+		assert.ok( ls( `${ url }/tags/1.0.0` ).includes( 'img/old@2.png' ) );
 		assert.equal( out( 'svn', [ 'cat', `${ url }/tags/1.1.0/src/keep.php` ] ), '<?php // v2\n' );
 		assert.equal( mime( `${ url }/assets/icon-256x256.png` ), 'image/png' );
 		assert.equal( ls( `${ url }/assets` ).includes( 'anim.gif' ), false );
@@ -247,6 +257,12 @@ try {
 		assert.match( refused.stderr, /Stable tag '1\.1\.0', not 1\.2\.0/ );
 		assert.equal( youngest( repo ), before );
 		assert.equal( out( 'svn', [ 'status' ], wc ), '', 'before anything is staged' );
+
+		buildZip( root, { version: '1.2.0', readme: '=== Fixture ===\r\nStable tag:\r\n1.2.0\r\n' } );
+		const blank = publish( root, wc, '1.2.0' );
+
+		assert.notEqual( blank.status, 0, 'a blank Stable tag is refused, whatever the next line says' );
+		assert.match( blank.stderr, /Stable tag '', not 1\.2\.0/ );
 	}
 
 	{
