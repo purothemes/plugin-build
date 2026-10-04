@@ -50,6 +50,14 @@ const VARIANT_RULES = [
 const PUBLISH_RULES = [
 	[ 'publish.productSlug', isNonEmptyString, 'a non-empty string' ],
 	[ 'publish.apiBase', isNonEmptyString, 'a non-empty string' ],
+];
+
+/**
+ * The keys that read an artifact's identity back out of its zip. Checked with
+ * the publish keys, or alone when requireIdentity is set: the WordPress.org
+ * publisher verifies the artifact the same way but uploads nowhere.
+ */
+const IDENTITY_RULES = [
 	[ 'publish.inZipProbe', isNonEmptyString, 'a non-empty string' ],
 	[ 'publish.packageVariantConstant', isConstantName, 'a PHP constant name' ],
 ];
@@ -86,10 +94,12 @@ function getPath( object, path ) {
  *
  * @param {string}  root                     Consuming plugin root.
  * @param {object}  [options]
- * @param {boolean} [options.requirePublish] Also validate the publish subtree.
+ * @param {boolean} [options.requirePublish]  Also validate the publish subtree.
+ * @param {boolean} [options.requireIdentity] Also validate the artifact identity
+ *                                            keys (implied by requirePublish).
  * @return {Promise<object>} The validated config (the module's default export).
  */
-export async function loadBuildConfig( root, { requirePublish = false } = {} ) {
+export async function loadBuildConfig( root, { requirePublish = false, requireIdentity = false } = {} ) {
 	const configPath = join( root, 'build-config.mjs' );
 
 	if ( ! existsSync( configPath ) ) {
@@ -109,7 +119,9 @@ export async function loadBuildConfig( root, { requirePublish = false } = {} ) {
 	const rules = [ ...BUILD_RULES ];
 
 	if ( requirePublish ) {
-		rules.push( [ 'publish.defaultChannel', isNonEmptyString, 'a non-empty string' ], ...PUBLISH_RULES );
+		rules.push( [ 'publish.defaultChannel', isNonEmptyString, 'a non-empty string' ], ...PUBLISH_RULES, ...IDENTITY_RULES );
+	} else if ( requireIdentity ) {
+		rules.push( ...IDENTITY_RULES );
 	}
 
 	for ( const [ path, predicate, expected ] of rules ) {

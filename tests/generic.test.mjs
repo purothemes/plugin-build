@@ -201,6 +201,21 @@ try {
 	}
 
 	{
+		// The WordPress.org publisher reads the artifact's identity but uploads
+		// nowhere: the identity keys bind without the upload keys.
+		const root = makeRoot( VALID_CONFIG.replace( "\t\tproductSlug: 'fixture',\n", '' ).replace( "\t\tapiBase: 'https://example.com',\n", '' ) );
+		await loadBuildConfig( root, { requireIdentity: true } );
+
+		const noProbe = makeRoot( VALID_CONFIG.replace( "\t\tinZipProbe: 'fixture/fixture.php',\n", '' ) );
+		await loadBuildConfig( noProbe );
+		await assert.rejects(
+			loadBuildConfig( noProbe, { requireIdentity: true } ),
+			/"publish\.inZipProbe" must be a non-empty string/,
+			'identity keys bind when requireIdentity is set'
+		);
+	}
+
+	{
 		const root = makeRoot( VALID_CONFIG.replace( "defaultChannel: 'lite',", "defaultChannel: 'pro'," ) );
 		await assert.rejects(
 			loadBuildConfig( root, { requirePublish: true } ),

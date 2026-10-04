@@ -107,7 +107,7 @@ export function parseReadmeMeta( readmeText ) {
  *         or a missing unzip binary, is thrown so it is never mistaken for an
  *         absent entry.
  */
-function readZipEntry( zipPath, entry ) {
+export function readZipEntry( zipPath, entry ) {
 	try {
 		return execFileSync( 'unzip', [ '-p', zipPath, entry ], {
 			encoding: 'utf8',
@@ -143,7 +143,7 @@ function readZipEntry( zipPath, entry ) {
  *         strings when the archive has no probe entry. Any other read failure
  *         propagates from readZipEntry().
  */
-function readArtifactIdentity( zipPath, config ) {
+export function readArtifactIdentity( zipPath, config ) {
 	const php = readZipEntry( zipPath, config.publish.inZipProbe );
 
 	if ( null === php ) {
