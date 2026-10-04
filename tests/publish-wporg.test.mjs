@@ -15,7 +15,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { parseArgs, parseStableTag, stageRelease, summarizeStatus, svn } from '../publish-wporg.mjs';
+import { parseArgs, parseStableTag, stageRelease, summarizeStatus, svn, svnRefusal } from '../publish-wporg.mjs';
 
 const SCRIPTS_DIR = join( import.meta.dirname, '..' );
 
@@ -46,21 +46,65 @@ for ( const args of [
 	[ 'ci', '-m', 'x' ],
 	[ 'checkin' ],
 	[ 'import', '.', 'file:///tmp/x' ],
-	[ 'mkdir', '-m', 'x', 'file:///tmp/x/tags/9.9.9' ],
-	[ 'cp', '-m', 'x', 'https://plugins.svn.wordpress.org/x/trunk', 'https://plugins.svn.wordpress.org/x/tags/9' ],
+	[ 'lock', 'trunk/readme.txt' ],
+	[ 'unlock', 'trunk/readme.txt' ],
+	[ 'switch', '^/tags/1.0.0' ],
+	[ 'relocate', 'https://example.com/x' ],
+	[ 'move', 'trunk/a', 'trunk/b' ],
+	[ 'cat', '^/trunk/readme.txt' ],
+	[ 'propset', '--revprop', '-r', '5', 'svn:log', 'x', '.' ],
+	[ 'propset', '-r', '5', 'svn:log', 'x', '.' ],
+	[ 'propset', 'svn:mime-type', 'image/png', '^/assets/icon.png' ],
+	[ 'cp', '^/trunk', '^/tags/x' ],
+	[ 'cp', 'trunk', '^/tags/x' ],
+	[ 'rm', '^/tags/x' ],
 	[ 'rm', '-m', 'x', 'svn+ssh://example.com/x/trunk' ],
+	[ 'mkdir', '-m', 'x', 'file:///tmp/x/tags/9.9.9' ],
+	[ 'mkdir', 'https://plugins.svn.wordpress.org/x/tags/9.9.9' ],
+	[ 'cp', 'https://plugins.svn.wordpress.org/x/trunk', 'https://plugins.svn.wordpress.org/x/tags/9' ],
 ] ) {
-	assert.throws( () => svn( args ), /never writes to a repository/, `svn ${ args.join( ' ' ) } is refused before svn runs` );
+	// The refusal is the guard's own message: it throws before svn runs.
+	assert.throws( () => svn( args ), /^Error: Refusing: .*publish-wporg never writes to a repository\.$/, `svn ${ args.join( ' ' ) } is refused before svn runs` );
+}
+
+// What the script does run passes: working-copy paths, and info on a URL.
+for ( const args of [
+	[ 'add', '--force', '--no-ignore', '--quiet', '/wc/trunk@' ],
+	[ 'rm', '--force', '--quiet', '/wc/trunk/old@2.png@' ],
+	[ 'cp', '--quiet', '/wc/trunk@', '/wc/tags/1.0.0@' ],
+	[ 'mkdir', '--quiet', '/wc/assets@' ],
+	[ 'propset', '--quiet', 'svn:mime-type', 'image/png', '/wc/assets/icon.png@' ],
+	[ 'propget', 'svn:mime-type', '/wc/assets/icon.png@' ],
+	[ 'info', '--show-item', 'repos-root-url', '/wc@' ],
+	[ 'info', 'https://plugins.svn.wordpress.org/x/tags/1.0.0' ],
+	[ 'status', '--no-ignore' ],
+] ) {
+	assert.equal( svnRefusal( args ), null, `svn ${ args.join( ' ' ) } is allowed` );
 }
 
 {
-	// Statically: svn runs from one place, svn(), whose guard is tested above,
+	// Statically: svn runs from one place, svn(), whose guard is tested above.
+	// Every process call in the script and the modules it imports is listed,
 	// and "svn commit" appears only inside printed text.
-	const source = readFileSync( join( SCRIPTS_DIR, 'publish-wporg.mjs' ), 'utf8' );
+	const sources = [ 'publish-wporg.mjs', 'publish-release.mjs', 'load-config.mjs', 'release-version.mjs' ]
+		.map( ( file ) => [ file, readFileSync( join( SCRIPTS_DIR, file ), 'utf8' ) ] );
+	const calls = [];
 
-	assert.equal( source.match( /execFileSync\(\s*'svn'/g ).length, 1, 'svn is run from svn() alone' );
-	assert.equal( /spawn|exec\(|execSync/.test( source ), false, 'and by no other process call' );
-	for ( const line of source.split( '\n' ).filter( ( l ) => l.includes( 'svn commit' ) ) ) {
+	for ( const [ file, source ] of sources ) {
+		assert.equal( /\b(spawn|spawnSync|execFile|exec|execSync|fork)\s*\(/.test( source ), false, `${ file } starts no process except through execFileSync` );
+		assert.equal( ( source.match( /execFileSync\s*\(/g ) || [] ).length, ( source.match( /execFileSync\(\s*'[a-z]+'/g ) || [] ).length, `${ file } names every command it runs` );
+		for ( const [ , command ] of source.matchAll( /execFileSync\(\s*'([a-z]+)'/g ) ) {
+			calls.push( `${ file }:${ command }` );
+		}
+	}
+
+	assert.deepEqual( calls.sort(), [ 'publish-release.mjs:unzip', 'publish-wporg.mjs:svn', 'publish-wporg.mjs:unzip' ], 'svn runs once, inside svn(); the rest is unzip' );
+
+	const wporg = sources[ 0 ][ 1 ];
+	const runner = wporg.slice( wporg.indexOf( 'export function svn(' ) );
+	assert.ok( runner.indexOf( 'svnRefusal( args )' ) < runner.indexOf( "execFileSync( 'svn'" ), 'and svn() checks the guard before it runs svn' );
+
+	for ( const line of wporg.split( '\n' ).filter( ( l ) => l.includes( 'svn commit' ) ) ) {
 		assert.match( line, /^\s*(`|export const NO_COMMIT = ')/, `"svn commit" only as printed text: ${ line.trim() }` );
 	}
 }

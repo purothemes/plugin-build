@@ -112,8 +112,10 @@ the publish channel are both validated against them.
 `publish-wporg.mjs` stages one release of a variant (normally the free build)
 into a working copy of the plugin's WordPress.org SVN repository. It never
 commits: a release reaches WordPress.org only when you run `svn commit`
-yourself. It refuses `--commit`, and its one svn runner refuses any commit
-subcommand and any URL target except for `svn info`.
+yourself. It refuses `--commit`. Its one svn runner allows only the
+working-copy subcommands it uses (`add`, `cp`, `info`, `mkdir`, `propget`,
+`propset`, `rm`, `status`), and refuses `--revprop`, `-r` and `-m`, and any URL
+or `^/` target except for the read-only `svn info`.
 
 A staged release is:
 

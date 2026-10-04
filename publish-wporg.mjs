@@ -17,9 +17,10 @@
  * The working copy itself is untouched. `--stage` applies them to the working
  * copy and stops, printing the status and the manual steps that follow.
  *
- * Nothing here writes to a repository. svn() refuses the commit subcommands,
- * and any URL target except for `svn info` (svn mkdir, cp and rm on a URL
- * commit at once), so no later edit can add a write by accident.
+ * Nothing here writes to a repository. svn() runs only an allowlist of
+ * working-copy subcommands, and refuses repository targets (URLs and ^/
+ * paths) and repository options (--revprop, -r, -m) except for the
+ * read-only `svn info`, so no later edit can add a write by accident.
  *
  * Before anything is staged, the artifact is read back the way publish-release
  * reads it: its version and variant must agree with the request, and its
@@ -127,25 +128,68 @@ export function parseStableTag( readmeText ) {
 /*  svn                                                                        */
 /* ──────────────────────────────────────────────────────────────────────────── */
 
-/** svn subcommands that write to a repository. None is ever run here. */
-const REPOSITORY_WRITES = [ 'commit', 'ci', 'checkin', 'import' ];
+/**
+ * The svn subcommands this script runs, and nothing else. Each acts on the
+ * working copy only, except that info may also read a repository URL (the
+ * existing-tag check). Every other subcommand is refused, including the ones
+ * that write to a repository without a commit: lock, unlock, switch,
+ * relocate, import, move.
+ */
+const WORKING_COPY_SUBCOMMANDS = [ 'add', 'cp', 'info', 'mkdir', 'propget', 'propset', 'rm', 'status' ];
+const REPOSITORY_READS = [ 'info' ];
+
+/**
+ * Options that only matter when svn talks to a repository: a revision
+ * property (--revprop writes one at once), a revision, a log message.
+ */
+const REPOSITORY_OPTIONS = /^(--revprop|--revision|--message|--file|-r|-m|-F)/;
+
+/**
+ * Why svn must not run with these arguments, or null when it may.
+ *
+ * An allowlist, not a list of known writes: a subcommand is refused unless it
+ * is one this script uses, and a repository target (a URL, or a ^/ path
+ * relative to the repository root) is refused unless the subcommand only
+ * reads. svn mkdir, cp and rm commit at once when given one.
+ *
+ * @param {string[]} args - svn arguments, the subcommand first.
+ * @return {string|null}
+ */
+export function svnRefusal( args ) {
+	const [ subcommand, ...rest ] = args;
+
+	if ( ! WORKING_COPY_SUBCOMMANDS.includes( subcommand ) ) {
+		return `'svn ${ subcommand }' is not one of the working-copy commands this script runs`;
+	}
+
+	const option = rest.find( ( arg ) => REPOSITORY_OPTIONS.test( arg ) );
+
+	if ( option ) {
+		return `'svn ${ subcommand } ${ option }' acts on the repository`;
+	}
+
+	const target = rest.find( ( arg ) => arg.includes( '://' ) || arg.startsWith( '^/' ) );
+
+	if ( target && ! REPOSITORY_READS.includes( subcommand ) ) {
+		return `'svn ${ subcommand }' on the repository target ${ target } writes to it`;
+	}
+
+	return null;
+}
 
 /**
  * Run a non-interactive svn command and return its stdout. The only place
- * this script runs svn.
- *
- * Refuses anything that writes to a repository: the commit subcommands, and
- * a URL target for any subcommand but info.
+ * this script runs svn, and every call passes svnRefusal() first.
  *
  * @param {string[]} args  - svn arguments, the subcommand first.
  * @param {string}   [cwd] - Working directory.
  * @return {string}
  */
 export function svn( args, cwd ) {
-	const subcommand = args[ 0 ];
+	const refusal = svnRefusal( args );
 
-	if ( REPOSITORY_WRITES.includes( subcommand ) || ( 'info' !== subcommand && args.some( ( arg ) => /^[a-z][a-z+]*:\/\//i.test( arg ) ) ) ) {
-		throw new Error( `Refusing 'svn ${ subcommand }' with these arguments: publish-wporg never writes to a repository.` );
+	if ( refusal ) {
+		throw new Error( `Refusing: ${ refusal }. publish-wporg never writes to a repository.` );
 	}
 
 	return execFileSync( 'svn', [ '--non-interactive', ...args ], {
