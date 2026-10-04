@@ -10,12 +10,12 @@
 
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { parseArgs, parseStableTag, stageRelease, summarizeStatus } from '../publish-wporg.mjs';
+import { parseArgs, parseStableTag, stageRelease, summarizeStatus, svn } from '../publish-wporg.mjs';
 
 const SCRIPTS_DIR = join( import.meta.dirname, '..' );
 
@@ -32,11 +32,38 @@ function hasTool( name ) {
 
 assert.deepEqual(
 	parseArgs( [ '--variant', 'free', '-v', '1.2.3', '--svn', 'wc' ] ),
-	{ version: '1.2.3', variant: 'free', svn: 'wc', root: '', commit: false },
+	{ version: '1.2.3', variant: 'free', svn: 'wc', root: '', stage: false },
 	'a dry run is the default'
 );
-assert.equal( parseArgs( [ '--commit' ] ).commit, true, '--commit opts in' );
-assert.throws( () => parseArgs( [ '--comit' ] ), /Unknown argument "--comit"/, 'a misspelt --commit is refused, not read as a dry run' );
+assert.equal( parseArgs( [ '--stage' ] ).stage, true, '--stage opts in' );
+assert.throws( () => parseArgs( [ '--stag' ] ), /Unknown argument "--stag"/, 'a misspelt --stage is refused, not read as a dry run' );
+assert.throws( () => parseArgs( [ '--commit' ] ), /--commit is not supported: publish-wporg never commits/, '--commit is refused by name' );
+
+/* ── nothing writes to a repository ────────────────────────────────────── */
+
+for ( const args of [
+	[ 'commit', '-m', 'x', '.' ],
+	[ 'ci', '-m', 'x' ],
+	[ 'checkin' ],
+	[ 'import', '.', 'file:///tmp/x' ],
+	[ 'mkdir', '-m', 'x', 'file:///tmp/x/tags/9.9.9' ],
+	[ 'cp', '-m', 'x', 'https://plugins.svn.wordpress.org/x/trunk', 'https://plugins.svn.wordpress.org/x/tags/9' ],
+	[ 'rm', '-m', 'x', 'svn+ssh://example.com/x/trunk' ],
+] ) {
+	assert.throws( () => svn( args ), /never writes to a repository/, `svn ${ args.join( ' ' ) } is refused before svn runs` );
+}
+
+{
+	// Statically: svn runs from one place, svn(), whose guard is tested above,
+	// and "svn commit" appears only inside printed text.
+	const source = readFileSync( join( SCRIPTS_DIR, 'publish-wporg.mjs' ), 'utf8' );
+
+	assert.equal( source.match( /execFileSync\(\s*'svn'/g ).length, 1, 'svn is run from svn() alone' );
+	assert.equal( /spawn|exec\(|execSync/.test( source ), false, 'and by no other process call' );
+	for ( const line of source.split( '\n' ).filter( ( l ) => l.includes( 'svn commit' ) ) ) {
+		assert.match( line, /^\s*(`|export const NO_COMMIT = ')/, `"svn commit" only as printed text: ${ line.trim() }` );
+	}
+}
 assert.throws( () => parseArgs( [ '--svn' ] ), /--svn requires a value/ );
 
 assert.equal( parseStableTag( '=== X ===\nStable tag: 1.4.0 \nLicense: GPL\n' ), '1.4.0' );
@@ -149,12 +176,25 @@ function makeRepo() {
 	return { repo, url, wc };
 }
 
+/**
+ * An svn on PATH for the CLI that logs each call, then runs the real svn.
+ * The log is the runtime proof that no CLI run ever asks svn to commit.
+ */
+const SHIM_DIR = join( TMP, 'shim' );
+const SVN_LOG = join( TMP, 'svn-calls.log' );
+
+mkdirSync( SHIM_DIR );
+writeFileSync( SVN_LOG, '' );
+writeFileSync( join( SHIM_DIR, 'svn' ), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${ SVN_LOG }'\nexec '${ execFileSync( 'sh', [ '-c', 'command -v svn' ], { encoding: 'utf8' } ).trim() }' "$@"\n` );
+chmodSync( join( SHIM_DIR, 'svn' ), 0o755 );
+
 function publish( root, wc, version, ...extra ) {
 	try {
 		const stdout = execFileSync( 'node', [ join( root, 'build', 'publish-wporg.mjs' ), '--variant', 'lite', '-v', version, '--svn', wc, ...extra ], {
 			cwd: root,
 			stdio: 'pipe',
 			encoding: 'utf8',
+			env: { ...process.env, PATH: `${ SHIM_DIR }:${ process.env.PATH }` },
 		} );
 		return { status: 0, stdout, stderr: '' };
 	} catch ( err ) {
@@ -171,7 +211,7 @@ try {
 	const root = makeRoot();
 	const { repo, url, wc } = makeRepo();
 
-	/* ── first release: dry run, then commit ──────────────────────────── */
+	/* ── first release: dry run, then stage ───────────────────────────── */
 
 	buildZip( root, { version: '1.0.0', files: { 'src/old.php': '<?php // old\n', 'src/keep.php': '<?php // v1\n', 'img/old@2.png': 'png\n' } } );
 
@@ -190,10 +230,24 @@ try {
 	}
 
 	{
-		const committed = publish( root, wc, '1.0.0', '--commit' );
+		const before = youngest( repo );
+		const staged = publish( root, wc, '1.0.0', '--stage' );
 
-		assert.equal( committed.status, 0, `first commit succeeds: ${ committed.stderr }` );
-		assert.equal( youngest( repo ), '2', '--commit makes one commit' );
+		assert.equal( staged.status, 0, `first stage succeeds: ${ staged.stderr }` );
+		assert.equal( youngest( repo ), before, '--stage commits nothing' );
+
+		const status = out( 'svn', [ 'status' ], wc );
+		for ( const line of [ 'A       trunk/fixture.php', 'A       trunk/img/old@2.png', 'A       assets/icon@2x.png', 'A  +    tags/1.0.0' ] ) {
+			assert.ok( status.includes( line ), `the working copy holds "${ line }"` );
+		}
+		assert.equal( out( 'svn', [ 'propget', 'svn:mime-type', join( wc, 'assets', 'icon@2x.png@' ) ] ).trim(), 'image/png', 'MIME types are staged too' );
+		assert.match( staged.stdout, /Nothing has been committed/ );
+		assert.ok( staged.stdout.includes( `  cd ${ wc }\n  svn status\n  svn diff\n  svn commit -m "Release 1.0.0"` ), 'and prints the manual steps' );
+
+		// The person's step: commit the staged working copy by hand. The
+		// repository then proves what --stage left there.
+		execFileSync( 'svn', [ 'commit', '-q', '-m', 'Release 1.0.0' ], { cwd: wc } );
+		assert.equal( youngest( repo ), String( Number( before ) + 1 ), 'one hand commit carries the whole release' );
 		assert.deepEqual( ls( `${ url }/trunk` ), [ 'fixture.php', 'img/', 'img/old@2.png', 'readme.txt', 'src/', 'src/keep.php', 'src/old.php' ] );
 		assert.deepEqual( ls( `${ url }/tags/1.0.0` ), ls( `${ url }/trunk` ), 'the tag is a copy of trunk' );
 		assert.equal( parseStableTag( out( 'svn', [ 'cat', `${ url }/trunk/readme.txt` ] ) ), '1.0.0', 'trunk Stable tag names the new tag' );
@@ -202,7 +256,6 @@ try {
 		assert.equal( mime( `${ url }/assets/anim.gif` ), 'image/gif' );
 		assert.equal( mime( `${ url }/assets/icon.svg` ), 'image/svg+xml' );
 		assert.equal( mime( `${ url }/assets/icon@2x.png@` ), 'image/png', 'an @ in a name is no peg revision' );
-		assert.match( committed.stdout, /both say Stable tag 1\.0\.0/, 'the committed result is read back from the repository' );
 	}
 
 	/* ── second release: adds, removes, modifies ──────────────────────── */
@@ -232,9 +285,18 @@ try {
 	}
 
 	{
-		const committed = publish( root, wc, '1.1.0', '--commit' );
+		const before = youngest( repo );
+		const staged = publish( root, wc, '1.1.0', '--stage' );
 
-		assert.equal( committed.status, 0, `second commit succeeds: ${ committed.stderr }` );
+		assert.equal( staged.status, 0, `second stage succeeds: ${ staged.stderr }` );
+		assert.equal( youngest( repo ), before, '--stage commits nothing' );
+
+		const status = out( 'svn', [ 'status' ], wc );
+		for ( const line of [ 'A       trunk/src/new.php', 'D       trunk/img/old@2.png', 'M       trunk/src/keep.php', 'D       assets/anim.gif', 'A  +    tags/1.1.0' ] ) {
+			assert.ok( status.includes( line ), `the working copy holds "${ line }"` );
+		}
+
+		execFileSync( 'svn', [ 'commit', '-q', '-m', 'Release 1.1.0' ], { cwd: wc } );
 		assert.deepEqual( ls( `${ url }/trunk` ), [ 'fixture.php', 'img/', 'img/new.png', 'readme.txt', 'src/', 'src/keep.php', 'src/new.php' ], 'trunk holds exactly the new ZIP' );
 		assert.deepEqual( ls( `${ url }/tags/1.1.0` ), ls( `${ url }/trunk` ) );
 		assert.ok( ls( `${ url }/tags/1.0.0` ).includes( 'src/old.php' ), 'the earlier tag is untouched' );
@@ -251,7 +313,7 @@ try {
 	{
 		buildZip( root, { version: '1.2.0', stable: '1.1.0' } );
 		const before = youngest( repo );
-		const refused = publish( root, wc, '1.2.0', '--commit' );
+		const refused = publish( root, wc, '1.2.0', '--stage' );
 
 		assert.notEqual( refused.status, 0, 'a Stable tag that is not the version is refused' );
 		assert.match( refused.stderr, /Stable tag '1\.1\.0', not 1\.2\.0/ );
@@ -267,7 +329,7 @@ try {
 
 	{
 		buildZip( root, { version: '1.1.0' } );
-		const refused = publish( root, wc, '1.1.0', '--commit' );
+		const refused = publish( root, wc, '1.1.0', '--stage' );
 
 		assert.notEqual( refused.status, 0, 'an existing tag is refused' );
 		assert.match( refused.stderr, /tags\/1\.1\.0 already exists/ );
@@ -313,6 +375,27 @@ try {
 		const trunkOnly = publish( root, join( wc, 'trunk' ), '1.2.0' );
 		assert.notEqual( trunkOnly.status, 0, 'a checkout of trunk alone is refused' );
 		assert.match( trunkOnly.stderr, /not of the repository root/ );
+	}
+
+	{
+		const before = youngest( repo );
+		const refused = publish( root, wc, '1.2.0', '--commit' );
+
+		assert.notEqual( refused.status, 0, '--commit is refused by the CLI' );
+		assert.match( refused.stderr, /publish-wporg never commits/ );
+		assert.equal( youngest( repo ), before );
+	}
+
+	/* ── at runtime, no CLI run ever asked svn to commit ──────────────── */
+
+	{
+		const calls = readFileSync( SVN_LOG, 'utf8' ).trim().split( '\n' );
+		const subcommands = new Set( calls.map( ( call ) => call.split( ' ' ).find( ( arg ) => ! arg.startsWith( '-' ) ) ) );
+
+		assert.ok( subcommands.has( 'add' ) && subcommands.has( 'cp' ), `the shim saw the CLI's svn calls: ${ [ ...subcommands ].join( ', ' ) }` );
+		for ( const write of [ 'commit', 'ci', 'checkin', 'import' ] ) {
+			assert.equal( subcommands.has( write ), false, `no CLI run called svn ${ write }` );
+		}
 	}
 
 	console.log( 'publish-wporg tests passed.' );

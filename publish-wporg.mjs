@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
- * Stage a built release ZIP into a WordPress.org SVN working copy, and commit
- * it only when asked.
+ * Stage a built release ZIP into a WordPress.org SVN working copy. It never
+ * commits: the release reaches WordPress.org only when a person commits it.
  *
  * One release is three changes to the plugin's SVN repository, staged together
- * so they land in one commit:
+ * so they land in one hand-made commit:
  *
  *   - trunk/ becomes exactly the ZIP's contents: new files are svn-added,
  *     files the ZIP no longer carries are svn-removed;
@@ -14,8 +14,12 @@
  *
  * The default is a dry run: the changes are staged in a scratch copy of the
  * working copy, its `svn status` is printed, and the scratch copy is deleted.
- * The working copy itself is untouched. `--commit` stages them in the working
- * copy and commits.
+ * The working copy itself is untouched. `--stage` applies them to the working
+ * copy and stops, printing the status and the manual steps that follow.
+ *
+ * Nothing here writes to a repository. svn() refuses the commit subcommands,
+ * and any URL target except for `svn info` (svn mkdir, cp and rm on a URL
+ * commit at once), so no later edit can add a write by accident.
  *
  * Before anything is staged, the artifact is read back the way publish-release
  * reads it: its version and variant must agree with the request, and its
@@ -27,7 +31,7 @@
  *
  * Usage:
  *   node publish-wporg.mjs --variant <name> -v <version> --svn <working copy>
- *                          [--root <plugin root>] [--commit]
+ *                          [--root <plugin root>] [--stage]
  *
  * The working copy is a checkout of the repository root (trunk/, tags/,
  * assets/ beneath it). It must have no local changes.
@@ -63,22 +67,27 @@ export const MIME_TYPES = {
 /*  CLI argument parsing                                                       */
 /* ──────────────────────────────────────────────────────────────────────────── */
 
+/** Printed for --commit, which earlier versions of this script accepted. */
+export const NO_COMMIT = '--commit is not supported: publish-wporg never commits. Stage the release with --stage, review it, then commit it yourself with svn commit.';
+
 /**
  * Parse argv. An unrecognised flag is an error, never silently ignored: a typo
- * of --commit must not quietly become a dry run, nor the other way round.
+ * of --stage must not quietly become a dry run.
  *
  * @param {string[]} argv - Args after the node script path.
- * @return {{ version: string, variant: string, svn: string, root: string, commit: boolean }}
+ * @return {{ version: string, variant: string, svn: string, root: string, stage: boolean }}
  */
 export function parseArgs( argv ) {
-	const options = { version: '', variant: '', svn: '', root: '', commit: false };
+	const options = { version: '', variant: '', svn: '', root: '', stage: false };
 	const valued = { '-v': 'version', '--variant': 'variant', '--svn': 'svn', '--root': 'root' };
 
 	for ( let i = 0; i < argv.length; i++ ) {
 		const arg = argv[ i ];
 
-		if ( '--commit' === arg ) {
-			options.commit = true;
+		if ( '--stage' === arg ) {
+			options.stage = true;
+		} else if ( '--commit' === arg ) {
+			throw new Error( NO_COMMIT );
 		} else if ( valued[ arg ] ) {
 			const value = argv[ ++i ];
 
@@ -118,14 +127,27 @@ export function parseStableTag( readmeText ) {
 /*  svn                                                                        */
 /* ──────────────────────────────────────────────────────────────────────────── */
 
+/** svn subcommands that write to a repository. None is ever run here. */
+const REPOSITORY_WRITES = [ 'commit', 'ci', 'checkin', 'import' ];
+
 /**
- * Run a non-interactive svn command and return its stdout.
+ * Run a non-interactive svn command and return its stdout. The only place
+ * this script runs svn.
  *
- * @param {string[]} args  - svn arguments.
+ * Refuses anything that writes to a repository: the commit subcommands, and
+ * a URL target for any subcommand but info.
+ *
+ * @param {string[]} args  - svn arguments, the subcommand first.
  * @param {string}   [cwd] - Working directory.
  * @return {string}
  */
-function svn( args, cwd ) {
+export function svn( args, cwd ) {
+	const subcommand = args[ 0 ];
+
+	if ( REPOSITORY_WRITES.includes( subcommand ) || ( 'info' !== subcommand && args.some( ( arg ) => /^[a-z][a-z+]*:\/\//i.test( arg ) ) ) ) {
+		throw new Error( `Refusing 'svn ${ subcommand }' with these arguments: publish-wporg never writes to a repository.` );
+	}
+
 	return execFileSync( 'svn', [ '--non-interactive', ...args ], {
 		cwd,
 		encoding: 'utf8',
@@ -309,6 +331,12 @@ export function stageRelease( { wc, pluginDir, assetsDir, version, skip } ) {
 	}
 
 	svn( [ 'cp', '--quiet', wcArg( join( wc, 'trunk' ) ), wcArg( tag ) ] );
+
+	const tagged = parseStableTag( readFileSync( join( tag, 'readme.txt' ), 'utf8' ) );
+
+	if ( tagged !== version ) {
+		throw new Error( `tags/${ version }/readme.txt Stable tag is '${ tagged }', not ${ version }.` );
+	}
 }
 
 /**
@@ -373,7 +401,7 @@ async function main() {
 	const { version, variant } = options;
 
 	if ( ! version || ! variant || ! options.svn ) {
-		fail( 'Usage: node publish-wporg.mjs --variant <name> -v <version> --svn <working copy> [--root <plugin root>] [--commit]' );
+		fail( 'Usage: node publish-wporg.mjs --variant <name> -v <version> --svn <working copy> [--root <plugin root>] [--stage]' );
 	}
 
 	const versionError = releaseVersionError( version );
@@ -493,7 +521,7 @@ async function main() {
 	const assetsDir = join( root, ASSETS_SOURCE );
 	let target = wc;
 
-	if ( ! options.commit ) {
+	if ( ! options.stage ) {
 		target = join( scratch, 'wc' );
 		cpSync( wc, target, { recursive: true } );
 	}
@@ -507,7 +535,7 @@ async function main() {
 			skip: config.excludeBasenames || [],
 		} );
 	} catch ( err ) {
-		fail( `${ err.message.trim() }${ options.commit ? `\n${ wc } may hold staged changes; svn revert -R it before retrying.` : '' }` );
+		fail( `${ err.message.trim() }${ options.stage ? `\n${ wc } may hold staged changes. Discard them before retrying:\n  cd ${ wc } && svn revert -R . && svn cleanup --remove-unversioned` : '' }` );
 	}
 
 	if ( ! existsSync( assetsDir ) ) {
@@ -522,26 +550,28 @@ async function main() {
 	for ( const line of summarizeStatus( status, version ) ) {
 		console.log( line );
 	}
-	console.log( `trunk/readme.txt Stable tag: ${ version }` );
+	console.log( `trunk/readme.txt and tags/${ version }/readme.txt Stable tag: ${ version }` );
 
-	if ( ! options.commit ) {
-		console.log( `\nDry run: staged in a scratch copy; ${ wc } is unchanged. Re-run with --commit to commit.` );
+	if ( ! options.stage ) {
+		console.log( `\nDry run: staged in a scratch copy; ${ wc } is unchanged. Re-run with --stage to stage it there.` );
 		return;
 	}
 
-	// Interactive, so svn can ask for the WordPress.org password.
-	execFileSync( 'svn', [ 'commit', '-m', `Release ${ version }`, wcArg( wc ) ], { stdio: 'inherit' } );
-
-	// Read the result back from the repository, not the working copy.
-	for ( const path of [ 'trunk/readme.txt', `tags/${ version }/readme.txt` ] ) {
-		const committed = parseStableTag( svn( [ 'cat', `${ repoRoot }/${ path }` ] ) );
-
-		if ( committed !== version ) {
-			fail( `Committed ${ path } has Stable tag '${ committed }', not ${ version }.` );
-		}
-	}
-
-	console.log( `\nCommitted. ${ repoRoot }: trunk/readme.txt and tags/${ version }/readme.txt both say Stable tag ${ version }.` );
+	// The script stops here. The release reaches WordPress.org only through
+	// the commit below, which a person runs.
+	console.log( [
+		'',
+		`Staged in ${ wc }. Nothing has been committed.`,
+		'',
+		'Next steps, by hand:',
+		`  cd ${ wc }`,
+		'  svn status',
+		'  svn diff',
+		`  svn commit -m "Release ${ version }"`,
+		'',
+		`Then tag the release in git: git tag ${ version }`,
+		`To discard the staged release instead: svn revert -R . && svn cleanup --remove-unversioned`,
+	].join( '\n' ) );
 }
 
 // Only run when invoked directly (not when imported by tests).
