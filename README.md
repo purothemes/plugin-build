@@ -110,7 +110,12 @@ the publish channel are both validated against them.
 ## WordPress.org release runbook
 
 `publish-wporg.mjs` stages one release of a variant (normally the free build)
-into a working copy of the plugin's WordPress.org SVN repository:
+into a working copy of the plugin's WordPress.org SVN repository. It never
+commits: a release reaches WordPress.org only when you run `svn commit`
+yourself. It refuses `--commit`, and its one svn runner refuses any commit
+subcommand and any URL target except for `svn info`.
+
+A staged release is:
 
 - `trunk/` becomes exactly the zip's contents: new files are added, files the
   zip no longer carries are removed;
@@ -133,10 +138,11 @@ It refuses, before staging anything, when:
 The default is a dry run. It stages the release in a scratch copy of the
 working copy, prints the exact `svn status` (adds `A`, deletes `D`,
 modifications `M`, property changes in column two) with a per-area count, and
-deletes the copy. The working copy is never changed. `--commit` stages into
-the working copy, commits it as `Release <version>`, then reads
-`trunk/readme.txt` and `tags/<version>/readme.txt` back from the repository and
-fails unless both carry Stable tag `<version>`.
+deletes the copy. The working copy is never changed. `--stage` makes the same
+changes in the working copy itself (adds, removes, the `tags/<version>/` copy,
+assets and MIME types), checks that `trunk/readme.txt` and
+`tags/<version>/readme.txt` both carry Stable tag `<version>`, prints the
+status and the manual steps, and stops.
 
 Steps for a release:
 
@@ -160,11 +166,21 @@ Steps for a release:
    Before each later release: `svn update ~/svn/<slug>`.
 4. Dry run, and read the status it prints:
    `npm run publish:wporg -- -v 1.2.0 --svn ~/svn/<slug>`
-5. Commit: the same command with `--commit`. svn asks for the WordPress.org
-   password (it is the SVN password from the profile, not the login one).
-6. Tag the release in git with the same version, so the git tag and the SVN
+5. Stage: the same command with `--stage`. The working copy now holds the
+   release; nothing is committed.
+6. Review it:
+   ```sh
+   cd ~/svn/<slug>
+   svn status
+   svn diff
+   ```
+   To discard it instead: `svn revert -R . && svn cleanup --remove-unversioned`.
+7. Commit it yourself, from the working copy:
+   `svn commit -m "Release 1.2.0"`. svn asks for the WordPress.org password
+   (the SVN password from the profile, not the login one).
+8. Tag the release in git with the same version, so the git tag and the SVN
    tag name the same code: `git tag 1.2.0 <commit> && git push origin 1.2.0`.
-7. Check the plugin page: the version, the banner, the icon and the
+9. Check the plugin page: the version, the banner, the icon and the
    screenshots. The directory can take some minutes to rebuild it.
 
 `--root <path>` points the script at another plugin root (default: the mount's
