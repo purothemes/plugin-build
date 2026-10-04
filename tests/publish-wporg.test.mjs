@@ -15,7 +15,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { parseArgs, parseStableTag, summarizeStatus } from '../publish-wporg.mjs';
+import { parseArgs, parseStableTag, stageRelease, summarizeStatus } from '../publish-wporg.mjs';
 
 const SCRIPTS_DIR = join( import.meta.dirname, '..' );
 
@@ -264,6 +264,15 @@ try {
 
 		assert.notEqual( remote.status, 0, 'a tag missing from the working copy but present in the repository is refused' );
 		assert.match( remote.stderr, /tags\/1\.1\.0 already exists in file:/ );
+
+		// The CLI asks the repository first, so this guard is for stageRelease()
+		// alone: svn cp onto an existing directory copies INTO it, and would
+		// commit tags/1.1.0/trunk/ without complaint.
+		assert.throws(
+			() => stageRelease( { wc, pluginDir: wc, assetsDir: '', version: '1.1.0', skip: [] } ),
+			/tags\/1\.1\.0 already exists in the working copy/
+		);
+		assert.equal( out( 'svn', [ 'status' ], wc ), '', 'refused before anything is staged' );
 	}
 
 	{
