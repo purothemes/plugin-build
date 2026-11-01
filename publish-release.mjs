@@ -567,7 +567,8 @@ async function main() {
 
 	// The release route never replaces a version: the same bytes again answer
 	// created false and write nothing; different bytes fail above with a 409.
-	console.log( false === result.created ? 'Already published with these exact bytes; nothing changed:' : 'Published release:' );
+	const unchanged = RELEASE_UPLOAD_PATH === auth.path && false === result.created;
+	console.log( unchanged ? 'Already published with these exact bytes; nothing changed:' : 'Published release:' );
 	console.log( `  release_id: ${ result.release_id }` );
 	console.log( `  r2_path:    ${ result.r2_path }` );
 	console.log( `  checksum:   ${ result.checksum }` );
