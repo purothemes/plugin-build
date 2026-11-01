@@ -3,9 +3,11 @@
  * Publish a built release ZIP to the update server.
  *
  * Uploads the dist/ artifact named by the config's zipName() to the server's
- * `POST /v1/admin/releases/upload` endpoint (raw ZIP body + metadata in the
- * query string, Bearer ADMIN_TOKEN auth). The server derives the storage path
- * and computes the SHA-256 checksum; this script supplies neither.
+ * upload endpoint (raw ZIP body + metadata in the query string, Bearer auth):
+ * `POST /v1/releases/upload` with the release-only token in CI, or
+ * `POST /v1/admin/releases/upload` with the admin token. The server derives
+ * the storage path and computes the SHA-256 checksum; this script supplies
+ * neither.
  *
  * The release metadata describing the artifact is read out of the archive
  * itself: the version and variant it was stamped with (checked against the
@@ -24,8 +26,11 @@
  * Environment:
  *   PURO_API_BASE    Base URL of the update server. Default: the config's
  *                    publish.apiBase.
- *   PURO_ADMIN_TOKEN REQUIRED bearer token for /v1/admin/* routes. Never
- *                    hardcoded; the script exits non-zero if it is unset.
+ *   PURO_RELEASE_TOKEN Bearer token for /v1/releases/upload only, held by CI
+ *                    as a repository secret. Used when set.
+ *   PURO_ADMIN_TOKEN Bearer token for /v1/admin/* routes, used only when
+ *                    PURO_RELEASE_TOKEN is unset. One of the two is required;
+ *                    neither is ever hardcoded.
  */
 
 import { execFileSync } from 'node:child_process';
@@ -252,6 +257,39 @@ function escapeHtml( s ) {
 }
 
 /* ──────────────────────────────────────────────────────────────────────────── */
+/*  Token and route                                                            */
+/* ──────────────────────────────────────────────────────────────────────────── */
+
+export const RELEASE_UPLOAD_PATH = '/v1/releases/upload';
+export const ADMIN_UPLOAD_PATH = '/v1/admin/releases/upload';
+
+/**
+ * Pick the bearer token and the upload route from the environment.
+ *
+ * The release-only token wins: it can add a release and nothing else, so CI
+ * never needs the admin token. The admin route stays for a manual publish.
+ * Blank values count as unset.
+ *
+ * @param {object} env - process.env or a test stand-in.
+ * @return {{ token: string, path: string, name: string }|null} null when neither is set.
+ */
+export function resolvePublishAuth( env ) {
+	const release = ( env.PURO_RELEASE_TOKEN || '' ).trim();
+
+	if ( release ) {
+		return { token: release, path: RELEASE_UPLOAD_PATH, name: 'PURO_RELEASE_TOKEN' };
+	}
+
+	const admin = ( env.PURO_ADMIN_TOKEN || '' ).trim();
+
+	if ( admin ) {
+		return { token: admin, path: ADMIN_UPLOAD_PATH, name: 'PURO_ADMIN_TOKEN' };
+	}
+
+	return null;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────── */
 /*  URL building                                                               */
 /* ──────────────────────────────────────────────────────────────────────────── */
 
@@ -265,10 +303,11 @@ function escapeHtml( s ) {
  * @param {string} base - API base URL (no trailing path required).
  * @param {object} meta - { product_slug, version, channel, requires_wp?,
  *                          requires_php?, tested_wp?, changelog? }
+ * @param {string} [path] - Upload route; the admin route by default.
  * @return {string} Fully-encoded upload URL.
  */
-export function buildUploadUrl( base, meta ) {
-	const url = new URL( '/v1/admin/releases/upload', base );
+export function buildUploadUrl( base, meta, path = ADMIN_UPLOAD_PATH ) {
+	const url = new URL( path, base );
 	const params = url.searchParams;
 
 	params.set( 'product_slug', meta.product_slug );
@@ -307,7 +346,7 @@ export function sha256Hex( bytes ) {
  *
  * @param {object} args
  * @param {string} args.url        - Fully-built upload URL (see buildUploadUrl).
- * @param {string} args.token      - PURO_ADMIN_TOKEN bearer value.
+ * @param {string} args.token      - Bearer value (see resolvePublishAuth).
  * @param {Buffer|Uint8Array} args.bytes - Raw ZIP bytes.
  * @param {typeof fetch} [args.fetchImpl] - Injectable fetch (for tests).
  * @return {Promise<object>} Parsed JSON: { success, release_id, r2_path, checksum, bytes }.
@@ -384,12 +423,12 @@ async function main() {
 		process.exit( 1 );
 	}
 
-	// Fail fast on a missing admin token — never fall back to a hardcoded value.
-	const adminToken = process.env.PURO_ADMIN_TOKEN;
-	if ( ! adminToken ) {
+	// Fail fast on a missing token — never fall back to a hardcoded value.
+	const auth = resolvePublishAuth( process.env );
+	if ( ! auth ) {
 		console.error(
-			'PURO_ADMIN_TOKEN is required but unset. Export the Puro admin token, e.g.\n' +
-			'  PURO_ADMIN_TOKEN=… npm run publish:pro -- -v ' + version
+			'PURO_RELEASE_TOKEN (CI) or PURO_ADMIN_TOKEN is required but unset, e.g.\n' +
+			'  PURO_RELEASE_TOKEN=… npm run publish:pro -- -v ' + version
 		);
 		process.exit( 1 );
 	}
@@ -508,17 +547,17 @@ async function main() {
 		requires_php: readmeMeta.requires_php,
 		tested_wp: readmeMeta.tested_wp,
 		changelog: changelog || undefined,
-	} );
+	}, auth.path );
 
 	const localChecksum = sha256Hex( bytes );
 
-	console.log( `Uploading dist/${ zipName } (${ bytes.length } bytes) → ${ apiBase } …` );
+	console.log( `Uploading dist/${ zipName } (${ bytes.length } bytes) → ${ apiBase }${ auth.path } with ${ auth.name } …` );
 
 	let result;
 	try {
 		result = await uploadRelease( {
 			url: uploadUrl,
-			token: adminToken,
+			token: auth.token,
 			bytes,
 		} );
 	} catch ( err ) {
@@ -526,7 +565,9 @@ async function main() {
 		process.exit( 1 );
 	}
 
-	console.log( 'Published release:' );
+	// The release route never replaces a version: the same bytes again answer
+	// created false and write nothing; different bytes fail above with a 409.
+	console.log( false === result.created ? 'Already published with these exact bytes; nothing changed:' : 'Published release:' );
 	console.log( `  release_id: ${ result.release_id }` );
 	console.log( `  r2_path:    ${ result.r2_path }` );
 	console.log( `  checksum:   ${ result.checksum }` );

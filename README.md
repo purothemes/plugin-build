@@ -106,6 +106,11 @@ the publish channel are both validated against them.
   the same way: the headers and changelog sent to the server describe the bytes
   being uploaded, not the current checkout, and a zip whose readme has no entry
   for the version is refused.
+- CI publishes with `PURO_RELEASE_TOKEN`, which opens only the update server's
+  `POST /v1/releases/upload`: Pro only, and a published version is never
+  replaced (the same bytes again change nothing; different bytes fail with
+  409). `PURO_ADMIN_TOKEN` and the admin route are used only when no release
+  token is set.
 
 ## WordPress.org release runbook
 
